@@ -255,7 +255,9 @@ impl AllowlistToken {
 
     /// Returns true if `address` is currently allowlisted.
     ///
-    /// Not affected by pause state — reads always succeed.
+    /// Not affected by pause state — reads always succeed. This view does not
+    /// extend the entry's TTL; transfer checks refresh existing entries when
+    /// their remaining TTL falls below the configured threshold.
     pub fn is_allowed(env: Env, address: Address) -> bool {
         env.storage()
             .persistent()
@@ -296,7 +298,9 @@ impl AllowlistToken {
     /// Transfer `amount` of the underlying token from `from` to `to`.
     ///
     /// Returns `Ok(false)` without forwarding if either party is not
-    /// allowlisted, emitting a `Blocked` event for auditability.
+    /// allowlisted, emitting a `Blocked` event for auditability. Checking an
+    /// existing allowlist entry extends its TTL when it falls below the
+    /// configured threshold.
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) -> Result<bool, Error> {
         if amount < 0 {
             return Err(Error::InvalidInput);
@@ -308,9 +312,9 @@ impl AllowlistToken {
 
         from.require_auth();
 
-        if !Self::is_allowed(env.clone(), from.clone())
-            || !Self::is_allowed(env.clone(), to.clone())
-        {
+        let from_allowed = Self::is_allowed_and_extend_ttl(&env, from.clone());
+        let to_allowed = Self::is_allowed_and_extend_ttl(&env, to.clone());
+        if !from_allowed || !to_allowed {
             Blocked { from, to, amount }.publish(&env);
             return Ok(false);
         }
@@ -340,6 +344,19 @@ impl AllowlistToken {
             return Err(Error::NotAuthorized);
         }
         Ok(())
+    }
+
+    fn is_allowed_and_extend_ttl(env: &Env, address: Address) -> bool {
+        let key = DataKey::Allowed(address);
+        let allowed = env.storage().persistent().get(&key).unwrap_or(false);
+        if allowed {
+            env.storage().persistent().extend_ttl(
+                &key,
+                ALLOWED_TTL_THRESHOLD,
+                ALLOWED_TTL_EXTEND_TO,
+            );
+        }
+        allowed
     }
 }
 
