@@ -14,6 +14,13 @@
 //! **Composition**: deploy this contract in front of an issuer's real token
 //! and point clients at it instead of the underlying token — cleared
 //! transfers are forwarded on via a cross-contract call.
+//!
+//! **Security boundary**: this wrapper cannot prevent callers from invoking
+//! the underlying token directly. That token must itself restrict transfers to
+//! calls from this wrapper, or the architecture must keep all underlying
+//! tokens in wrapper-controlled custody and prevent direct holder transfers.
+//! SAC `AUTH_REQUIRED` and `AUTH_REVOCABLE` flags alone do not restrict which
+//! contract may call `transfer`; they authorize or revoke accounts.
 #![no_std]
 
 use soroban_sdk::{
