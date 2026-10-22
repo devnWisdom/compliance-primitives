@@ -136,6 +136,9 @@ impl AllowlistToken {
     /// Add `address` to the allowlist. Admin-only.
     pub fn add_to_allowlist(env: Env, admin: Address, address: Address) -> Result<(), Error> {
         Self::require_admin(&env, &admin)?;
+        if Self::is_paused(env.clone()) {
+            return Err(Error::ContractPaused);
+        }
         let key = DataKey::Allowed(address.clone());
         env.storage().persistent().set(&key, &true);
         env.storage().persistent().extend_ttl(
@@ -150,6 +153,9 @@ impl AllowlistToken {
     /// Remove `address` from the allowlist. Admin-only.
     pub fn remove_from_allowlist(env: Env, admin: Address, address: Address) -> Result<(), Error> {
         Self::require_admin(&env, &admin)?;
+        if Self::is_paused(env.clone()) {
+            return Err(Error::ContractPaused);
+        }
         env.storage()
             .persistent()
             .remove(&DataKey::Allowed(address.clone()));
