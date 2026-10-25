@@ -311,6 +311,31 @@ fn test_non_admin_allowlist_mutations_rejected_end_to_end() {
 }
 
 #[test]
+fn test_pause_blocks_allowlist_mutations_but_allows_admin_rotation() {
+    let env = Env::default();
+    let (admin, _token_id, _contract_id, client) = setup(&env);
+    let alice = Address::generate(&env);
+    let next_admin = Address::generate(&env);
+
+    client.add_to_allowlist(&admin, &alice);
+    client.pause(&admin);
+
+    assert_eq!(
+        client.try_add_to_allowlist(&admin, &Address::generate(&env)),
+        Err(Ok(Error::ContractPaused))
+    );
+    assert_eq!(
+        client.try_remove_from_allowlist(&admin, &alice),
+        Err(Ok(Error::ContractPaused))
+    );
+    assert!(client.is_allowed(&alice));
+
+    client.propose_admin(&admin, &next_admin);
+    client.accept_admin(&next_admin);
+    assert_eq!(client.get_admin(), next_admin);
+}
+
+#[test]
 fn test_delegated_add_to_allowlist_succeeds() {
     let env = Env::default();
     let (admin, _token_id, _contract_id, client) = setup(&env);

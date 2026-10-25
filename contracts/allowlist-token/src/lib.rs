@@ -225,74 +225,9 @@ impl AllowlistToken {
     /// via `remove_from_allowlist` but never grant it.
     pub fn add_to_allowlist(env: Env, admin: Address, address: Address) -> Result<(), Error> {
         Self::require_admin(&env, &admin)?;
-        if let Some(exp) = expiration_ledger {
-            if exp < env.ledger().sequence() {
-                return Err(Error::InvalidInput);
-            }
+        if Self::is_paused(env.clone()) {
+            return Err(Error::ContractPaused);
         }
-        let key = DataKey::Allowed(address.clone());
-        env.storage()
-            .persistent()
-            .set(&key, &AllowlistEntry { expiration_ledger });
-        env.storage().persistent().extend_ttl(
-            &key,
-            ALLOWED_TTL_THRESHOLD,
-            ALLOWED_TTL_EXTEND_TO,
-        );
-        AllowAdd { address }.publish(&env);
-        Ok(())
-    }
-
-    /// Add `address` to the allowlist using a signed off-chain authorization
-    /// payload. This path verifies a nonce and expiry before applying the
-    /// allowlist change, so a relayer can submit it on behalf of the admin.
-    pub fn add_to_allowlist_delegated(
-        env: Env,
-        admin: Address,
-        address: Address,
-        nonce: u64,
-        expiry: u64,
-        signature: BytesN<64>,
-    ) -> Result<(), Error> {
-        Self::require_configured_admin(&env, &admin)?;
-
-        let now = env.ledger().timestamp();
-        // Strict comparison: `expiry == now` is already expired, so a zero
-        // expiry or one at the current ledger timestamp is rejected. Only
-        // `expiry > now` is accepted.
-        if expiry <= now {
-            return Err(Error::ExpiredSignature);
-        }
-
-        let last_nonce: u64 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::DelegatedNonce(admin.clone()))
-            .unwrap_or(0);
-        if nonce <= last_nonce {
-            return Err(Error::InvalidNonce);
-        }
-
-        let pubkey: BytesN<32> = env
-            .storage()
-            .instance()
-            .get(&DataKey::DelegatedAdminPubKey)
-            .ok_or(Error::DelegationNotConfigured)?;
-        let action = Symbol::new(&env, "add_to_allowlist");
-        let message = Self::delegated_action_message(&env, &address, &action, nonce, expiry);
-        match soroban_sdk::env::internal::Env::verify_sig_ed25519(
-            &env,
-            pubkey.to_object(),
-            message.to_object(),
-            signature.to_object(),
-        ) {
-            Ok(_) => {}
-            Err(_) => return Err(Error::NotAuthorized),
-        }
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::DelegatedNonce(admin), &nonce);
         let key = DataKey::Allowed(address.clone());
         env.storage().persistent().set(&key, &true);
         env.storage().persistent().extend_ttl(
@@ -306,7 +241,10 @@ impl AllowlistToken {
 
     /// Remove `address` from the allowlist. Admin or compliance officer.
     pub fn remove_from_allowlist(env: Env, admin: Address, address: Address) -> Result<(), Error> {
-        Self::require_compliance_authority(&env, &admin)?;
+        Self::require_admin(&env, &admin)?;
+        if Self::is_paused(env.clone()) {
+            return Err(Error::ContractPaused);
+        }
         env.storage()
             .persistent()
             .remove(&DataKey::Allowed(address.clone()));
