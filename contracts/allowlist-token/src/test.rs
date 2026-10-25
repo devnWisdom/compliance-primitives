@@ -586,6 +586,42 @@ fn test_add_to_allowlist_extends_persistent_ttl() {
     });
 }
 
+#[test]
+fn test_transfers_keep_allowlist_entries_live_past_original_ttl() {
+    use soroban_sdk::testutils::storage::Persistent as _;
+
+    let env = Env::default();
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 100_000;
+        li.min_persistent_entry_ttl = 500;
+        li.max_entry_ttl = 6_311_520;
+    });
+
+    let (admin, _token_id, contract_id, client) = setup(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    client.add_to_allowlist(&admin, &alice);
+    client.add_to_allowlist(&admin, &bob);
+
+    let transfer_interval = ALLOWED_TTL_EXTEND_TO - ALLOWED_TTL_THRESHOLD + 1;
+    for _ in 0..3 {
+        env.ledger().with_mut(|li| li.sequence_number += transfer_interval);
+        assert!(client.transfer(&alice, &bob, &1));
+        env.as_contract(&contract_id, || {
+            for address in [&alice, &bob] {
+                let ttl = env
+                    .storage()
+                    .persistent()
+                    .get_ttl(&DataKey::Allowed(address.clone()));
+                assert_eq!(ttl, ALLOWED_TTL_EXTEND_TO);
+            }
+        });
+    }
+
+    assert!(client.is_allowed(&alice));
+    assert!(client.is_allowed(&bob));
+}
+
 /// Property: after any sequence of add/remove on a fixed address pool,
 /// `is_allowed(addr)` matches whether the last op touching `addr` was an add.
 #[test]

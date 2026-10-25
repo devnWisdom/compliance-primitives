@@ -406,11 +406,9 @@ impl AllowlistToken {
 
     /// Returns true if `address` is currently allowlisted.
     ///
-    /// An entry whose `expiration_ledger` has passed (current ledger sequence
-    /// is greater than it) is treated as not allowlisted, even though it has
-    /// not been explicitly removed.
-    ///
-    /// Not affected by pause state — reads always succeed.
+    /// Not affected by pause state — reads always succeed. This view does not
+    /// extend the entry's TTL; transfer checks refresh existing entries when
+    /// their remaining TTL falls below the configured threshold.
     pub fn is_allowed(env: Env, address: Address) -> bool {
         let entry: Option<AllowlistEntry> =
             env.storage().persistent().get(&DataKey::Allowed(address));
@@ -478,7 +476,9 @@ impl AllowlistToken {
     /// Transfer `amount` of the underlying token from `from` to `to`.
     ///
     /// Returns `Ok(false)` without forwarding if either party is not
-    /// allowlisted, emitting a `Blocked` event for auditability.
+    /// allowlisted, emitting a `Blocked` event for auditability. Checking an
+    /// existing allowlist entry extends its TTL when it falls below the
+    /// configured threshold.
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) -> Result<bool, Error> {
         if amount < 0 {
             return Err(Error::InvalidInput);
@@ -490,9 +490,9 @@ impl AllowlistToken {
 
         from.require_auth();
 
-        if !Self::is_allowed(env.clone(), from.clone())
-            || !Self::is_allowed(env.clone(), to.clone())
-        {
+        let from_allowed = Self::is_allowed_and_extend_ttl(&env, from.clone());
+        let to_allowed = Self::is_allowed_and_extend_ttl(&env, to.clone());
+        if !from_allowed || !to_allowed {
             Blocked { from, to, amount }.publish(&env);
             return Ok(false);
         }
@@ -528,52 +528,17 @@ impl AllowlistToken {
         Ok(())
     }
 
-    /// Checks that `caller` is either the admin or the compliance officer.
-    fn require_compliance_authority(env: &Env, caller: &Address) -> Result<(), Error> {
-        caller.require_auth();
-        let stored_admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
-        if stored_admin == *caller {
-            return Ok(());
+    fn is_allowed_and_extend_ttl(env: &Env, address: Address) -> bool {
+        let key = DataKey::Allowed(address);
+        let allowed = env.storage().persistent().get(&key).unwrap_or(false);
+        if allowed {
+            env.storage().persistent().extend_ttl(
+                &key,
+                ALLOWED_TTL_THRESHOLD,
+                ALLOWED_TTL_EXTEND_TO,
+            );
         }
-        if let Some(officer) = env
-            .storage()
-            .instance()
-            .get::<DataKey, Address>(&DataKey::ComplianceOfficer)
-        {
-            if officer == *caller {
-                return Ok(());
-            }
-        }
-        Err(Error::NotAuthorized)
-    }
-
-    /// Message signed by the delegated admin key:
-    /// `allowlist-delegated-v1:<target>:<action>:<nonce>:<expiry>`.
-    fn delegated_action_message(
-        env: &Env,
-        target: &Address,
-        action: &Symbol,
-        nonce: u64,
-        expiry: u64,
-    ) -> Bytes {
-        let mut message = Bytes::new(env);
-        message.append(&Bytes::from_slice(env, b"allowlist-delegated-v1:"));
-        let target_str = target.to_string().to_string();
-        message.append(&Bytes::from_slice(env, target_str.as_bytes()));
-        message.push_back(b':');
-        let action_str = action.to_string().to_string();
-        message.append(&Bytes::from_slice(env, action_str.as_bytes()));
-        message.push_back(b':');
-        let nonce_str = alloc::format!("{nonce}");
-        message.append(&Bytes::from_slice(env, nonce_str.as_bytes()));
-        message.push_back(b':');
-        let expiry_str = alloc::format!("{expiry}");
-        message.append(&Bytes::from_slice(env, expiry_str.as_bytes()));
-        message
+        allowed
     }
 }
 
